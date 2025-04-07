@@ -9,7 +9,6 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <signal.h>
-#include <stdbool.h>
 
 #include "UDP_File_Transfer.h"  // Ensure this header defines Packet, Operation, etc.
 
@@ -17,14 +16,12 @@
 #define CLIENT_PORT 69
 #define MAX_RETRIES 5
 
-volatile sig_atomic_t running = true; // An Un-interruptable atomic type or in other words "An invisible object"
+volatile sig_atomic_t running = 1; // An Un-interruptable atomic type or in other words "An invisible object"
 
 void handle_signal(int signal) {
-    running = false; //Setting Running To False When Receiving A Signal
-    printf("\nStopping server...\n");
-    fflush(stdout);
-}
+    running = 0; //Setting Running To False When Receiving A Signal
 
+}
 
 
 void send_packet(int sockfd, struct sockaddr_in *server_addr, Packet *packet) {
@@ -60,9 +57,11 @@ void handle_read(int sockfd, struct sockaddr_in *server_addr, const char *filena
 
     size_t bytesRead;
     int retries = 0; // setting retries to 0 for each block
+    int block_n = 1;
 
-    while ((bytesRead = fread(packet.data, 1, BUFFER, file)) > 0) {
-        packet.block_n = retries + 1; // increment block number
+    while ((bytesRead = fread(packet.data, 512, BUFFER, file)) < 0) {
+        retries = 0;
+        packet.block_n = block_n; // increment block number
         send_packet(sockfd, server_addr, &packet);
 
         // waiting for ack
@@ -77,7 +76,7 @@ void handle_read(int sockfd, struct sockaddr_in *server_addr, const char *filena
     }
 
     fclose(file);  // Close the file after reading
-    printf("File '%s' sent to server.\n", filename);
+    printf("File '%s' was read.\n", filename);
 }
 
 void handle_write(int sockfd, struct sockaddr_in *server_addr, const char *filename) {
@@ -88,27 +87,33 @@ void handle_write(int sockfd, struct sockaddr_in *server_addr, const char *filen
     }
 
     Packet packet = {0};
-    packet.oper = WRQ;
+    packet.oper = WRQ;  // Write request operation
     strncpy(packet.filename, filename, FILE_NAME_LEN);
 
     // Send WRQ to server
     send_packet(sockfd, server_addr, &packet);
 
-    ssize_t recv_len;  // storing the data
+    ssize_t recv_len;  // Variable to store received data length
 
     while ((recv_len = recvfrom(sockfd, &packet, sizeof(Packet), 0, NULL, NULL)) > 0) {
-        // write the data into the file
-        fwrite(packet.data, 1, recv_len - offsetof(Packet, data), file);
+        // Check if the packet is valid and contains data
+        if (recv_len > offsetof(Packet, data)) {
+            fwrite(packet.data, 1, recv_len - offsetof(Packet, data), file);  // Write the data portion
+            printf("Received block %d with %zu bytes\n", packet.block_n, recv_len - offsetof(Packet, data));
+        } else {
+            printf("Error: Received invalid packet\n");
+            break;
+        }
 
-        printf("Received block %d with %zu bytes\n", packet.block_n, recv_len - offsetof(Packet, data));
-
+        // If the server sends an EOF signal or if the packet is smaller than expected
         if (recv_len < sizeof(Packet)) {
-            // EOF
+            printf("EOF reached. File transfer complete.\n");
             break;
         }
     }
+
     fclose(file);
-    printf("File '%s' sent to server.\n", filename);
+    printf("File '%s' received from server.\n", filename);
 }
 
 void handle_delete(int sockfd, struct sockaddr_in *server_addr, const char *filename) {
@@ -117,8 +122,9 @@ void handle_delete(int sockfd, struct sockaddr_in *server_addr, const char *file
     strncpy(packet.filename, filename, FILE_NAME_LEN);
 
     send_packet(sockfd, server_addr, &packet);
+
     Packet ack_packet = {0}; //Waiting for ack from server
-    receive_response(sockfd, &packet);
+    receive_response(sockfd, &ack_packet);
 
     //checking if recived
     if (ack_packet.oper == ACK) {
@@ -138,17 +144,17 @@ int main() {
     sigaction(SIGINT, &sa, NULL); // Handle Control+C
 
 
-    struct sockaddr_in server_addr;
+    struct sockaddr_in client_addr;
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
 
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(CLIENT_PORT);
-    inet_pton(AF_INET, CLIENT_ADDRESS, &server_addr.sin_addr);
+    memset(&client_addr, 0, sizeof(client_addr));
+    client_addr.sin_family = AF_INET;
+    client_addr.sin_port = htons(CLIENT_PORT);
+    inet_pton(AF_INET, CLIENT_ADDRESS, &client_addr.sin_addr);
 
     int choice;
     char filename[FILE_NAME_LEN];
@@ -159,19 +165,26 @@ int main() {
     printf("3. Delete a file on server\n");
     printf("4. Exit\n");
 
-    while (1) {
-        printf("\nEnter choice: ");
-        scanf("%d", &choice);
-        if (choice == 4) break;
+    printf("\nEnter choice: ");
+    scanf("%d", &choice);
 
-        printf("Enter filename: ");
-        scanf("%s", filename);
+
+    while (running) {
+
+        if (choice == 1 || choice == 2 || choice == 3) {
+            printf("Enter filename: ");
+            scanf("%s", filename);
+            break;
+        }
+
+            if (choice == 4) break;
 
         switch (choice) {
-            case 1: handle_read(sockfd, &server_addr, filename); break;
-            case 2: handle_write(sockfd, &server_addr, filename); break;
-            case 3: handle_delete(sockfd, &server_addr, filename); break;
-            default: printf("Invalid choice. Try again.\n"); break;
+            case 1: handle_read(sockfd, &client_addr, filename); break;
+            case 2: handle_write(sockfd, &client_addr, filename); break;
+            case 3: handle_delete(sockfd, &client_addr, filename); break;
+            default: printf("\n Invalid choice. Try again.\n"); break;
+
         }
     }
 

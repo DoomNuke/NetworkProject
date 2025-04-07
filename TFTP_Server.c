@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
-#include <stdbool.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 
@@ -17,13 +16,11 @@
 #define MAX_RETRIES 5
 
 
-volatile sig_atomic_t running = true; // An Un-interruptable atomic type or in other words "An invisible object"
+volatile sig_atomic_t running = 1; // An Un-interruptable atomic type or in other words "An invisible object"
 
 
 void handle_signal(int signal) {
-    running = false; //Setting Running To False When Receiving A Signal
-    printf("\nStopping server...\n");
-    fflush(stdout);
+    running = 0; //Setting Running To False When Receiving A Signal
 }
 
 
@@ -61,33 +58,44 @@ void handle_request(int sockfd, struct sockaddr_in client_addr) {
                     size_t bytesRead;
                     while ((bytesRead = fread(packet.data, 1, BUFFER, file)) > 0)
                         {
-                            retries = 0; // Resetting retries with each send
                             packet.block_n = block_n;
                             printf("Read %zu bytes from file\n", bytesRead);
-                            while (retries < MAX_RETRIES) {
+
+                            retries = 0; // Resetting retries with each send
+                            while (retries != MAX_RETRIES) {
                                 if (sendto(sockfd, &packet, sizeof(Packet), 0, (struct sockaddr*)&client_addr, client_addr_len) < sizeof(Packet)) {
                                     printf("Failed to send the complete packet... Retrying...\n");
                                     retries++;
                                     continue;
                                 }
 
-                               const ssize_t ack_size = recvfrom(sockfd, &ack_packet, sizeof(Packet), 0, (struct sockaddr*)&client_addr, &client_addr_len);
+                                ssize_t ack_size = recvfrom(sockfd, &ack_packet, sizeof(Packet), 0, (struct sockaddr*)&client_addr, &client_addr_len);
 
-                                if (ack_size > 0 && ack_packet.oper == ACK && ack_packet.block_n == block_n ) {
-                                    printf("Received ACK for block: %d\n", block_n);
-                                    block_n++;
-                                    break;
-                                }
-                                else {
-                                    printf("No ACK Received, retrying... %d\n", retries);
-                                    sleep(5);
+
+                                if (ack_size < 0) {
+                                    // Debugging: Print the received ACK details
+                                    printf("Received ACK with block number: %d (Expected block: %d)\n", ack_packet.block_n, block_n);
+
+                                    // Check if the packet is a valid ACK for the expected block number
+                                    if (ack_packet.oper == ACK && ack_packet.block_n == block_n) {
+                                        printf("Correct ACK received for block: %d\n", block_n);
+                                        block_n++;  // Move to the next block number
+                                        break;  // Exit the retry loop and proceed with the next packet
+                                    } else {
+                                        // If the ACK does not match, print an error and retry
+                                        printf("Invalid ACK received. Expected block: %d, Received block: %d\n", block_n, ack_packet.block_n);
+                                    }
+                                } else {
+                                    // If no ACK was received (timeout or other issue), retry
+                                    printf("No ACK received, retrying... %d\n", retries);
+                                    sleep(5);  // Wait a little before retrying
                                     retries++;
                                 }
 
+
                                 if (retries == MAX_RETRIES) {
-                                    printf("Max retries reached, exiting...\n");
+                                    printf("Max retries reached, stopping request...\n");
                                     fclose(file);
-                                    return;
                                 }
                             }
                     fclose(file);

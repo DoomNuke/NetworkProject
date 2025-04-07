@@ -8,7 +8,7 @@
 
 
 #define FILE_NAME_LEN 60
-#define BUFFER 1024
+#define BUFFER 512
 
 typedef enum operate {
     RRQ = 10, //Read Request
