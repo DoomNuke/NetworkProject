@@ -1,3 +1,0 @@
-/home/doomz/Networking_Project/cmake-build-debug/CMakeFiles/Networking_Project.dir
-/home/doomz/Networking_Project/cmake-build-debug/CMakeFiles/edit_cache.dir
-/home/doomz/Networking_Project/cmake-build-debug/CMakeFiles/rebuild_cache.dir
