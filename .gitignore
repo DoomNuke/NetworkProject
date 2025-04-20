@@ -1,0 +1,4 @@
+# Ignore All Of The Temp Created Files and object files
+*.o
+*.txt
+
