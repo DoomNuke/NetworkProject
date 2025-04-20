@@ -5,5 +5,12 @@ set(CMAKE_C_STANDARD 11)
 
 add_executable(Networking_Project TFTP_Server.c
         TFTP_Client.c
-        UDP_File_Transfer.h
-        error_handling_TFTP.c)
+        UDP_Utils.h
+        Error_Handling.c
+        TFTP_Server.h
+        TFTP_Client.h
+        Error_Handling.h
+        Utils.c
+        Utils.h
+        UDP_Logger.c
+        UDP_Logger.h)

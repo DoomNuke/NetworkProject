@@ -8,10 +8,10 @@
 		},
 		"paths" : 
 		{
-			"cmake" : "/home/doomz/Downloads/clion-251.23774.112/bin/cmake/linux/x64/bin/cmake",
-			"cpack" : "/home/doomz/Downloads/clion-251.23774.112/bin/cmake/linux/x64/bin/cpack",
-			"ctest" : "/home/doomz/Downloads/clion-251.23774.112/bin/cmake/linux/x64/bin/ctest",
-			"root" : "/home/doomz/Downloads/clion-251.23774.112/bin/cmake/linux/x64/share/cmake-3.31"
+			"cmake" : "/home/doomz/Downloads/clion-251.23774.202/bin/cmake/linux/x64/bin/cmake",
+			"cpack" : "/home/doomz/Downloads/clion-251.23774.202/bin/cmake/linux/x64/bin/cpack",
+			"ctest" : "/home/doomz/Downloads/clion-251.23774.202/bin/cmake/linux/x64/bin/ctest",
+			"root" : "/home/doomz/Downloads/clion-251.23774.202/bin/cmake/linux/x64/share/cmake-3.31"
 		},
 		"version" : 
 		{
@@ -26,7 +26,7 @@
 	"objects" : 
 	[
 		{
-			"jsonFile" : "codemodel-v2-6c1211870be6059703d8.json",
+			"jsonFile" : "codemodel-v2-1dcaddf065da4ecf82d7.json",
 			"kind" : "codemodel",
 			"version" : 
 			{
@@ -35,7 +35,7 @@
 			}
 		},
 		{
-			"jsonFile" : "cache-v2-363089e923e59a0ab958.json",
+			"jsonFile" : "cache-v2-2f70414bc5d88581d5f9.json",
 			"kind" : "cache",
 			"version" : 
 			{
@@ -44,7 +44,7 @@
 			}
 		},
 		{
-			"jsonFile" : "cmakeFiles-v1-7cd07ace60112be4edb7.json",
+			"jsonFile" : "cmakeFiles-v1-616db7eea9f50b704c1a.json",
 			"kind" : "cmakeFiles",
 			"version" : 
 			{
@@ -66,7 +66,7 @@
 	{
 		"cache-v2" : 
 		{
-			"jsonFile" : "cache-v2-363089e923e59a0ab958.json",
+			"jsonFile" : "cache-v2-2f70414bc5d88581d5f9.json",
 			"kind" : "cache",
 			"version" : 
 			{
@@ -76,7 +76,7 @@
 		},
 		"cmakeFiles-v1" : 
 		{
-			"jsonFile" : "cmakeFiles-v1-7cd07ace60112be4edb7.json",
+			"jsonFile" : "cmakeFiles-v1-616db7eea9f50b704c1a.json",
 			"kind" : "cmakeFiles",
 			"version" : 
 			{
@@ -86,7 +86,7 @@
 		},
 		"codemodel-v2" : 
 		{
-			"jsonFile" : "codemodel-v2-6c1211870be6059703d8.json",
+			"jsonFile" : "codemodel-v2-1dcaddf065da4ecf82d7.json",
 			"kind" : "codemodel",
 			"version" : 
 			{

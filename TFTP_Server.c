@@ -5,237 +5,192 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <signal.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <signal.h>
 
-#include "UDP_File_Transfer.h"
+#include "TFTP_Server.h"
+#include "UDP_Logger.h"
 
-#define SERVER_PORT 69
-#define SERVER_ADDRESS "127.0.0.1"
-#define MAX_RETRIES 5
+volatile sig_atomic_t running = 1;
 
-
-volatile sig_atomic_t running = 1; // An Un-interruptable atomic type or in other words "An invisible object"
-
-
-void handle_signal(int signal) {
-    running = 0; //Setting Running To False When Receiving A Signal
+void sigint_handler(int sig) {
+    (void) sig; //To Avoid Param
+    running = 0;
+    printf("\n[SERVER] shut down...\n");
 }
 
-
-
-void handle_request(int sockfd, struct sockaddr_in client_addr) {
-    Packet packet;
-    socklen_t client_addr_len = sizeof(client_addr);
-    FILE *file = NULL;
-    int retries = 0; //Number Of Retries
-    uint16_t block_n = 1; //Starting Data Packets Number With 1
-
-
-    //Receive Packets Of Data
-
-    recvfrom(sockfd, &packet, sizeof(Packet), 0, (struct sockaddr*)&client_addr, &client_addr_len);
-
-    //Acknowledgment
-    Packet ack_packet; //Acknowledgment Packet
-    ack_packet.oper = ACK;
-    ack_packet.ack = 0; //Starting the ACK with 0
-    ack_packet.block_n = block_n;
-
-
-
-    switch (packet.oper){
-        case RRQ:
-        { //Reading From a File
-            printf("Reading Request For The File Named: %s\n", packet.filename);
-            //To Read In Binary Mode
-            file = fopen(packet.filename, "rb");
-            if (file == NULL) {
-                send_error(sockfd, &client_addr, 1, "File not found\n");
-                break;
-            }
-                    size_t bytesRead;
-                    while ((bytesRead = fread(packet.data, 1, BUFFER, file)) > 0)
-                        {
-                            packet.block_n = block_n;
-                            printf("Read %zu bytes from file\n", bytesRead);
-
-                            retries = 0; // Resetting retries with each send
-                            while (retries != MAX_RETRIES) {
-                                if (sendto(sockfd, &packet, sizeof(Packet), 0, (struct sockaddr*)&client_addr, client_addr_len) < sizeof(Packet)) {
-                                    printf("Failed to send the complete packet... Retrying...\n");
-                                    retries++;
-                                    continue;
-                                }
-
-                                ssize_t ack_size = recvfrom(sockfd, &ack_packet, sizeof(Packet), 0, (struct sockaddr*)&client_addr, &client_addr_len);
-
-
-                                if (ack_size < 0) {
-                                    // Debugging: Print the received ACK details
-                                    printf("Received ACK with block number: %d (Expected block: %d)\n", ack_packet.block_n, block_n);
-
-                                    // Check if the packet is a valid ACK for the expected block number
-                                    if (ack_packet.oper == ACK && ack_packet.block_n == block_n) {
-                                        printf("Correct ACK received for block: %d\n", block_n);
-                                        block_n++;  // Move to the next block number
-                                        break;  // Exit the retry loop and proceed with the next packet
-                                    } else {
-                                        // If the ACK does not match, print an error and retry
-                                        printf("Invalid ACK received. Expected block: %d, Received block: %d\n", block_n, ack_packet.block_n);
-                                    }
-                                } else {
-                                    // If no ACK was received (timeout or other issue), retry
-                                    printf("No ACK received, retrying... %d\n", retries);
-                                    sleep(5);  // Wait a little before retrying
-                                    retries++;
-                                }
-
-
-                                if (retries == MAX_RETRIES) {
-                                    printf("Max retries reached, stopping request...\n");
-                                    fclose(file);
-                                }
-                            }
-                    fclose(file);
-                  }
-            break;
+//Checks if the root directory exists
+void dir_exists(const char *dir) {
+    if (access(dir, F_OK) != 0) {
+        printf("Creating %s ...\n", dir);
+        if (mkdir(dir, 0777) != 0) {
+            perror("Creating Directory Failed");
+            exit(1);
         }
-        case WRQ: {
-            //Creating/Appending a file
-            printf("Writing Request For The File Named: %s\n", packet.filename);
-            //Appending is the cause of creation of files and appending to the last line of the requested line
-            file = fopen(packet.filename, "wb");
-            if (file == NULL) {
-                send_error(sockfd, &client_addr, 2, "Unable To Open File For Writing\n");
-            }
-            else {
-
-                block_n = 1; //Starting Block Number
-                while (1){
-                    retries = 0;
-
-                    const ssize_t data_size = recvfrom(sockfd, &ack_packet, sizeof(Packet), 0, (struct sockaddr*)&client_addr, &client_addr_len);
-
-                    if (data_size < sizeof(Packet)) {
-                        printf("Failed To Receive complete packet... retrying...\n");
-                        retries++;
-                        continue;
-                    }
-
-                   const size_t bytesWritten = fwrite(packet.data, 1, data_size, file);
-                    if (bytesWritten < bytesWritten - sizeof(Packet)) {
-                        printf("Failed writing to file... Retrying...\n");
-                        retries++;
-                        continue;
-                    }
-
-                    packet.oper = ACK; //Acknowledge operation enum
-                    packet.block_n = block_n; //Block Number
-
-                    while (retries < MAX_RETRIES) {
-                        if (sendto(sockfd, &packet, sizeof(Packet), 0, (struct sockaddr*)&client_addr, client_addr_len) < sizeof(Packet)) {
-                            printf("Failed to send ACK... Retrying...\n");
-                            retries++;
-                            continue;
-                        }
-
-                        if (data_size < BUFFER) {
-                            printf("All data received, write complete\n");
-                            fclose(file);
-                            return;
-                        }
-
-                        block_n++;
-                        break;
-                    }
-
-                    if (retries == MAX_RETRIES) {
-                        printf("Max retries reached, exiting...\n");
-                        fclose(file);
-                        return;
-                    }
-                }
-            }
-            break;
-        }
-
-
-        case DEL:
-        {
-        //Deleting a file
-
-        printf("Deleting Request For The File Named: %s\n", packet.filename);
-
-        if (access(packet.filename, F_OK) != 0) //Checking if the file exist and has the right permissions
-        {
-            send_error(sockfd, &client_addr, 1, "File not found\n");
-            break;
-        }
-            if (remove(packet.filename) == 0) {
-                printf("File has %s has been deleted successfully\n", packet.filename);
-
-
-                packet.oper = ACK;
-                packet.block_n = block_n;
-
-                if (sendto(sockfd, &packet, sizeof(Packet), 0, (struct sockaddr*)&client_addr, client_addr_len) < sizeof(Packet)) {
-                    printf("Failed to send ACK after deleting the file...\n");
-                }
-            }
-            else {
-                    send_error(sockfd, &client_addr, 2, "Unable to delete file\n");
-                }
-             break;
-        }
-
-        default:
-            printf("Unknown Operation\n");
-            break;
     }
 }
 
-    int main() {
+void send_ack(int sockfd, struct sockaddr_in *client, socklen_t client_len, uint16_t block) {
+    unsigned char ack[4] = {0};
 
-        struct sockaddr_in server_addr;
+    ack[0] = 0;
+    ack[1] = OPCODE_ACK;
+    ack[2] = (uint8_t)(block >> 8);
+    ack[3] = (uint8_t)(block & 0xFF);
 
-    // Set up signal handling
+    sendto(sockfd, ack, 4, 0, (struct sockaddr *)client, client_len);
+}
 
-    struct sigaction sa;
-    sa.sa_handler = handle_signal;
-    sigemptyset(&sa.sa_mask); //Clearing all signals
-    sa.sa_flags = 0;
-    sigaction(SIGINT, &sa, NULL); // Handle Control+C
+void handle_rrq(int sockfd, struct sockaddr_in *client, socklen_t client_len, const char *filename, const TftpConfig *config) {
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s", config->root_folder, filename);
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        printf("File %s/%s doesn't exist...", config->root_folder, filename);
+        return;
+    }
 
-        int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-        if (sockfd < 0) {
-            perror("Socket Creation Failed\n");
-            exit(EXIT_FAILURE);
+    //LOGGER - Logging the RRQ requests
+    char client_ip[INET_ADDRSTRLEN];
+    get_client_ip(client, client_ip, sizeof(client_ip));
+    char log_msg[300];
+    snprintf(log_msg, sizeof(log_msg), "RRQ from %s for file: %s", client_ip, filename);
+    log_event(log_msg);
+
+    unsigned char buffer[config->buffer_size];
+    uint16_t block = 1;
+    size_t bytes;
+
+    do {
+        buffer[0] = 0;
+        buffer[1] = OPCODE_DATA;
+        buffer[2] = (unsigned char)block >> 8;
+        buffer[3] = (unsigned char)block & 0xFF;
+
+        bytes = fread(&buffer[4], 1, config->data_size, file);
+        sendto(sockfd, buffer, bytes + 4, 0, (struct sockaddr *)client, client_len);
+
+        recvfrom(sockfd, buffer, config->buffer_size, 0, (struct sockaddr *) client, &client_len);
+        block++;
+    } while (bytes == config->data_size);
+
+    fclose(file);
+}
+
+void handle_wrq(int sockfd, struct sockaddr_in *client, socklen_t client_len,const char *filename, const TftpConfig *config) {
+    char path[256], buffer[config->buffer_size];
+    snprintf(path, sizeof(path), "%s/%s", config->root_folder, filename);
+    FILE *file = fopen(path, "wb");
+    if (!file) {
+        printf("File %s/%s could not be created", config->root_folder,filename);
+        return;
+    }
+
+    //LOGGER - Logging the WRQ Requests
+    char client_ip[INET_ADDRSTRLEN];
+    get_client_ip(client, client_ip, sizeof(client_ip));
+    char log_msg[300];
+    snprintf(log_msg, sizeof(log_msg), "WRQ from %s to upload file: %s", client_ip, filename);
+    log_event(log_msg);
+
+    send_ack(sockfd, client, client_len, 0);
+    uint16_t expected = 1;
+
+    while (1) {
+        ssize_t n = recvfrom(sockfd, buffer, config->buffer_size, 0, (struct sockaddr *)client, &client_len);
+        if (buffer[1] == OPCODE_DATA) {
+            uint16_t block = (buffer[2] << 8 | buffer[3] );
+            if (block == expected) {
+                fwrite(&buffer[4], 1, n - 4, file);
+                send_ack(sockfd, client, client_len, block);
+                expected++;
+                if (n < config->buffer_size) break;
+            }
         }
+    }
 
-        //Structure Of The Server
+    fclose(file);
+ }
 
-        memset(&server_addr, 0, sizeof(server_addr));
-        server_addr.sin_family = AF_INET;
-        server_addr.sin_addr.s_addr = inet_addr(SERVER_ADDRESS);
-        server_addr.sin_port = htons(SERVER_PORT);
+void handle_delete(int sockfd, struct sockaddr_in *client, socklen_t client_len, const char *filename,const TftpConfig *config) {
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s", config->root_folder, filename);
+    char client_ip[INET_ADDRSTRLEN];
+    get_client_ip(client, client_ip, sizeof(client_ip));
 
-        if (bind(sockfd, (const struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-            perror("Binding Failed\n");
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
 
-    printf("Server is running on port %d, Press Control+C To Stop\n", SERVER_PORT);
+    if (remove(path) == 0) {
+        send_ack(sockfd, client, client_len, 0);
+        printf("Removed the file successfully\n");
+        //LOGGER - For Delete Operation
+        char log_msg[256];
+        snprintf(log_msg, sizeof(log_msg), "DELETE from %s for file: %s", client_ip, filename);
+        log_event(log_msg);
+    }
+    else {
+        printf("Failed to delete the file\n");
+    }
+}
+
+
+void start_server() {
+    const TftpConfig *config = &default_tftp_config;
+
+    dir_exists(config->root_folder);
+    //If the server hits control+c it exits
+    signal(SIGINT, sigint_handler);
+
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in server = {0}, client;
+    server.sin_family = AF_INET;
+    server.sin_port = htons(config->port);
+    server.sin_addr.s_addr = INADDR_ANY; //Accepts any incoming connections
+    socklen_t addr_len = sizeof(server);
+    if (bind(sockfd, (struct sockaddr *)&server, addr_len) < 0) {
+        perror("Binding Failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("TFTP Server started on port %d\n", config->port);
+    log_event("Server started successfully");
+
+    char buffer[config->buffer_size];
+    socklen_t client_len = sizeof(client);
 
     while (running) {
-        handle_request(sockfd, server_addr);
+        ssize_t n = recvfrom (sockfd, buffer, config->buffer_size, MSG_DONTWAIT, (struct sockaddr *)&client, &client_len); //Running on a non blocking state
+        if (n <= 0) {
+            usleep(25000); //Waits for 2.5 ms to avoid cpu overload
+            continue;
+        }
+
+        char *filename = &buffer[2];
+
+        switch (buffer[1]) {
+            case OPCODE_RRQ:
+                handle_rrq(sockfd, &client, client_len, filename, config);
+                break;
+            case OPCODE_WRQ:
+                handle_wrq(sockfd, &client, client_len, filename, config);
+                break;
+            case OPCODE_DELETE:
+                handle_delete(sockfd, &client, client_len, filename, config);
+                break;
+            default:
+                printf("Unknown opcode\n");
+        }
     }
-
-    printf("Server Shutting Down...\n");
     close(sockfd);
+    log_event("Server shut down");
+    printf("[SERVER] socket closed, Exiting...\n");
+}
 
-
+int main() {
+    printf("[SERVER] Initializing...\n");
+    start_server();
+    printf("[SERVER] Terminated.\n");
     return 0;
 }

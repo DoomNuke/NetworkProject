@@ -115,7 +115,7 @@
 				}
 			],
 			"type" : "INTERNAL",
-			"value" : "/home/doomz/Downloads/clion-251.23774.112/bin/cmake/linux/x64/bin/cmake"
+			"value" : "/home/doomz/Downloads/clion-251.23774.202/bin/cmake/linux/x64/bin/cmake"
 		},
 		{
 			"name" : "CMAKE_CPACK_COMMAND",
@@ -127,7 +127,7 @@
 				}
 			],
 			"type" : "INTERNAL",
-			"value" : "/home/doomz/Downloads/clion-251.23774.112/bin/cmake/linux/x64/bin/cpack"
+			"value" : "/home/doomz/Downloads/clion-251.23774.202/bin/cmake/linux/x64/bin/cpack"
 		},
 		{
 			"name" : "CMAKE_CTEST_COMMAND",
@@ -139,7 +139,7 @@
 				}
 			],
 			"type" : "INTERNAL",
-			"value" : "/home/doomz/Downloads/clion-251.23774.112/bin/cmake/linux/x64/bin/ctest"
+			"value" : "/home/doomz/Downloads/clion-251.23774.202/bin/cmake/linux/x64/bin/ctest"
 		},
 		{
 			"name" : "CMAKE_C_COMPILER",
@@ -543,7 +543,7 @@
 				}
 			],
 			"type" : "UNINITIALIZED",
-			"value" : "/home/doomz/Downloads/clion-251.23774.112/bin/ninja/linux/x64/ninja"
+			"value" : "/home/doomz/Downloads/clion-251.23774.202/bin/ninja/linux/x64/ninja"
 		},
 		{
 			"name" : "CMAKE_MODULE_LINKER_FLAGS",
@@ -775,7 +775,7 @@
 				}
 			],
 			"type" : "INTERNAL",
-			"value" : "/home/doomz/Downloads/clion-251.23774.112/bin/cmake/linux/x64/share/cmake-3.31"
+			"value" : "/home/doomz/Downloads/clion-251.23774.202/bin/cmake/linux/x64/share/cmake-3.31"
 		},
 		{
 			"name" : "CMAKE_SHARED_LINKER_FLAGS",
