@@ -1,0 +1,4 @@
+#Ignoring Object Files
+*.o
+#Ignoring Any Text Test Files
+*.txt
